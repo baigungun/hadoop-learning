@@ -1,0 +1,123 @@
+
+package com.people.prepare.feature;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.GenericOptionsParser;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+
+import com.prepare.util.HdfsUtil;
+
+
+public class FeatureJob extends Configured implements Tool {
+
+    public static void main(String[] args) throws Exception {
+        int nRet = ToolRunner.run(new Configuration(), new FeatureJob(), args);
+        System.out.println(nRet);
+    }
+
+    @Override
+    public int run(String[] args) throws Exception {
+        long startTime = System.currentTimeMillis();
+
+        Configuration conf = new Configuration();
+        String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
+
+        if (otherArgs.length < 7) {
+            System.err.println("Usage: <in> [<in>...] <out>");
+            System.exit(2);
+        }
+
+  
+        String mccCnf = otherArgs[0];// 配置文件
+        String moneySegCnf = otherArgs[1];// 配置文件
+        String actionCnf = otherArgs[2];// 配置文件
+        String prefixCnf = otherArgs[3];
+        String scoreCnfInput = otherArgs[4];// 偏好配置文件作为输入
+        String url_input = otherArgs[5];
+        String url_output = otherArgs[6];
+        
+        
+        conf.setStrings("prefixCnf", prefixCnf);// "hdfs://192.168.1.124:8020"
+        conf.setStrings("mccCnf", mccCnf);
+        conf.setStrings("moneySegCnf", moneySegCnf);
+        conf.setStrings("actionCnf", actionCnf);
+        
+        Job job = Job.getInstance(conf);
+        job.setJobName("feature predeal ...");
+        
+        job.setJarByClass(FeatureJob.class);
+        job.setReducerClass(FeatureReducer.class);
+
+        job.setMapOutputKeyClass(Text.class);
+        job.setMapOutputValueClass(Text.class);
+        
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+
+        // 处理输出目录，每次计算之前先查看，如果存在，先删除
+        Boolean flag_out = HdfsUtil.fileExist(url_output);
+        if (flag_out) {
+            System.out.println("file output is exsited, delete it");
+            HdfsUtil.deleteDir(url_output);
+        }
+        FileOutputFormat.setOutputPath(job, new Path(otherArgs[otherArgs.length - 1]));
+
+        // 处理输入目录或文件，如果其不存在，则过滤掉。如果存在，但是文件内容为空，也过滤掉。
+        try {
+			Boolean flag_in = HdfsUtil.fileExist(url_input);
+			if (flag_in) {
+			    String in_size = HdfsUtil.getSize(url_input);
+			    if (!in_size.equals("0Bytes")) {
+			    	MultipleInputs.addInputPath(job, new Path(url_input), TextInputFormat.class, FeatureMapper.class);
+			        /*Boolean flag_done = HdfsUtil.fileExist(url_input + "/done");
+			        if (flag_done) {
+			            MultipleInputs.addInputPath(job, new Path(url_input), TextInputFormat.class, FeatureMapper.class);
+			        } else {
+			            System.out.println("prepare input path done file is not exsit");
+			        }*/
+			    }
+			} else {
+			    System.err.println("Usage: predeal input file is not exist!");
+			    System.exit(2);
+			}
+			
+			Boolean flag_score_in = HdfsUtil.fileExist(scoreCnfInput);
+			if (flag_score_in) {
+			    String data_in_size = HdfsUtil.getSize(scoreCnfInput);
+			    if (!data_in_size.equals("0Bytes")) {
+			        MultipleInputs.addInputPath(job, new Path(scoreCnfInput), TextInputFormat.class, ScoreMapper.class);
+			        /*Boolean flag_done = HdfsUtil.fileExist(scoreCnfInput + "/done");
+	                if (flag_done) {
+	                	MultipleInputs.addInputPath(job, new Path(scoreCnfInput), TextInputFormat.class, ScoreMapper.class);
+	                } else {
+	                    System.out.println("userFeature score input path done file is not exsist");
+	                }*/
+			    } else {
+			        System.out.println("user prefer score file input size is 0 !");
+			    }
+			} else {
+			    System.out.println("user prefer score file input file not exist!");
+			}
+		} catch (Exception e) {
+			System.out.println(e);
+		}
+
+        int result = job.waitForCompletion(true) ? 0 : 1;
+
+        long endTime = System.currentTimeMillis();
+        System.out.println("program runs " + (endTime - startTime) / 1000 + " seconds");
+
+        if (job.isSuccessful()) {
+            HdfsUtil.writeFile(url_output);
+        } 
+        return result;
+    }
+}
